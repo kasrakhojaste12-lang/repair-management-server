@@ -18,7 +18,9 @@ export async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, config.jwtSecret);
     const user = await queryOne(
-      'SELECT id, username, full_name, role, created_at FROM users WHERE id = ?',
+      `SELECT id, username, full_name, role, created_at, password_hash,
+              security_question, security_answer_hash
+         FROM users WHERE id = ?`,
       [payload.sub]
     );
     if (!user) {

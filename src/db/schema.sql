@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS `users` (
   `password_hash` VARCHAR(255) NOT NULL,
   `full_name` VARCHAR(120) NOT NULL,
   `role` ENUM('admin', 'employee') NOT NULL DEFAULT 'employee',
+  `security_question` VARCHAR(255) NULL,
+  `security_answer_hash` VARCHAR(255) NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
