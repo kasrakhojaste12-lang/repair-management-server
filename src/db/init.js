@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import mysql from 'mysql2/promise';
 import { config } from '../config/env.js';
+import { hashAnswer } from '../utils/security.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -16,6 +17,35 @@ async function readSqlFile(name) {
 async function tableCount(connection, table) {
   const [rows] = await connection.query(`SELECT COUNT(*) AS total FROM \`${table}\``);
   return Number(rows[0]?.total) || 0;
+}
+
+async function hasColumn(connection, table, column) {
+  const [rows] = await connection.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [config.db.database, table, column]
+  );
+  return rows.length > 0;
+}
+
+// برای دیتابیس‌های قدیمی که ستون‌های سوال امنیتی را ندارند
+async function migrate(connection) {
+  const applied = [];
+  if (!(await hasColumn(connection, 'users', 'security_question'))) {
+    await connection.query(
+      'ALTER TABLE `users` ADD COLUMN `security_question` VARCHAR(255) NULL AFTER `role`'
+    );
+    applied.push('security_question');
+  }
+  if (!(await hasColumn(connection, 'users', 'security_answer_hash'))) {
+    await connection.query(
+      'ALTER TABLE `users` ADD COLUMN `security_answer_hash` VARCHAR(255) NULL AFTER `security_question`'
+    );
+    applied.push('security_answer_hash');
+  }
+  if (applied.length) {
+    console.log(`✔ ستون‌های جدید به جدول کاربران اضافه شد: ${applied.join('، ')}`);
+  }
 }
 
 async function main() {
@@ -35,23 +65,33 @@ async function main() {
     await connection.changeUser({ database: config.db.database });
     console.log(`✔ دیتابیس و جداول اماده شد: ${config.db.database}`);
 
+    await migrate(connection);
+
     if ((await tableCount(connection, 'users')) === 0) {
       const adminHash = bcrypt.hashSync('admin123', 10);
       const employeeHash = bcrypt.hashSync('employee123', 10);
+      const question = 'نام شهر محل تولد شما چیست؟';
       await connection.query(
-        'INSERT INTO `users` (`id`, `username`, `password_hash`, `full_name`, `role`) VALUES (1, ?, ?, ?, ?), (2, ?, ?, ?, ?)',
+        `INSERT INTO \`users\`
+           (\`id\`, \`username\`, \`password_hash\`, \`full_name\`, \`role\`, \`security_question\`, \`security_answer_hash\`)
+         VALUES (1, ?, ?, ?, ?, ?, ?), (2, ?, ?, ?, ?, ?, ?)`,
         [
           'admin',
           adminHash,
           'مدیر سیستم',
           'admin',
+          question,
+          hashAnswer('تهران'),
           'employee',
           employeeHash,
           'کارمند پذیرش',
-          'employee'
+          'employee',
+          question,
+          hashAnswer('شیراز')
         ]
       );
       console.log('✔ کاربران پیش‌فرض ساخته شدند (admin/admin123 و employee/employee123)');
+      console.log('  • سوال امنیتی هر دو: «نام شهر محل تولد شما چیست؟» — پاسخ admin: تهران ، پاسخ employee: شیراز');
     } else {
       console.log('• جدول کاربران خالی نبود؛ ایجاد کاربر پیش‌فرض رد شد.');
     }

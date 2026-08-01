@@ -1,11 +1,13 @@
 import { createApp } from './app.js';
 import { config } from './config/env.js';
 import { assertConnection } from './db/pool.js';
+import { runMigrations } from './db/migrations.js';
 
 async function start() {
   try {
     await assertConnection();
     console.log(`✔ اتصال به MySQL برقرار شد (${config.db.host}:${config.db.port}/${config.db.database})`);
+    await runMigrations();
   } catch (error) {
     if (error?.code === 'ECONNREFUSED') {
       console.error('✖ MySQL در دسترس نیست. اگر XAMPP دارید، از کنترل‌پنل ان MySQL را Start کنید.');

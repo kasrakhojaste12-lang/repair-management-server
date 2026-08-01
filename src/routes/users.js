@@ -2,11 +2,12 @@ import bcrypt from 'bcryptjs';
 import express from 'express';
 import { execute, query, queryOne } from '../db/pool.js';
 import { asyncHandler, badRequest, getPagination, notFound, requireFields, searchTerm } from '../utils/http.js';
+import { hashAnswer, MIN_ANSWER_LENGTH, MIN_PASSWORD_LENGTH } from '../utils/security.js';
 
 const router = express.Router();
 
-const USER_COLUMNS = 'id, username, full_name, role, created_at';
-const MIN_PASSWORD_LENGTH = 6;
+const USER_COLUMNS =
+  'id, username, full_name, role, created_at, security_question, (security_answer_hash IS NOT NULL) AS has_security_question';
 const ROLES = ['admin', 'employee'];
 
 function assertRole(role) {
@@ -17,6 +18,26 @@ function assertPassword(password) {
   if (String(password).length < MIN_PASSWORD_LENGTH) {
     throw badRequest(`رمز عبور باید حداقل ${MIN_PASSWORD_LENGTH} کاراکتر باشد.`);
   }
+}
+
+// سوال و پاسخ امنیتی اختیاری است، ولی اگر یکی آمد باید دومی هم بیاید
+function readSecurity(body, { required = false } = {}) {
+  const question = body.security_question === undefined ? '' : String(body.security_question).trim();
+  const answer = body.security_answer === undefined ? '' : String(body.security_answer).trim();
+
+  if (!question && !answer) {
+    if (required) throw badRequest('سوال و پاسخ امنیتی را وارد کنید.');
+    return null;
+  }
+  if (!question || !answer) {
+    throw badRequest('برای بازیابی رمز، هم سوال امنیتی و هم پاسخ آن لازم است.');
+  }
+  if (question.length < 5) throw badRequest('متن سوال امنیتی خیلی کوتاه است.');
+  if (answer.length < MIN_ANSWER_LENGTH) {
+    throw badRequest(`پاسخ سوال امنیتی باید حداقل ${MIN_ANSWER_LENGTH} کاراکتر باشد.`);
+  }
+
+  return { question, answerHash: hashAnswer(answer) };
 }
 
 router.get(
@@ -33,7 +54,10 @@ router.get(
     );
     const totals = await queryOne(`SELECT COUNT(*) AS total FROM users ${where}`, whereParams);
 
-    res.json({ data, pagination: { page, limit, total: Number(totals?.total) || 0 } });
+    res.json({
+      data: data.map((row) => ({ ...row, has_security_question: Boolean(Number(row.has_security_question)) })),
+      pagination: { page, limit, total: Number(totals?.total) || 0 }
+    });
   })
 );
 
@@ -44,6 +68,7 @@ router.post(
     const { username, password, full_name, role } = req.body;
     assertRole(role);
     assertPassword(password);
+    const security = readSecurity(req.body);
 
     const existing = await queryOne('SELECT id FROM users WHERE username = ?', [
       String(username).trim()
@@ -51,8 +76,16 @@ router.post(
     if (existing) throw badRequest('این نام کاربری قبلاً ثبت شده است.');
 
     const result = await execute(
-      'INSERT INTO users (username, password_hash, full_name, role) VALUES (?, ?, ?, ?)',
-      [String(username).trim(), bcrypt.hashSync(String(password), 10), String(full_name).trim(), role]
+      `INSERT INTO users (username, password_hash, full_name, role, security_question, security_answer_hash)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        String(username).trim(),
+        bcrypt.hashSync(String(password), 10),
+        String(full_name).trim(),
+        role,
+        security ? security.question : null,
+        security ? security.answerHash : null
+      ]
     );
     const user = await queryOne(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, [result.insertId]);
 
@@ -66,6 +99,7 @@ router.put(
     requireFields(req.body, ['full_name', 'role']);
     const { full_name, role, password } = req.body;
     assertRole(role);
+    const security = readSecurity(req.body);
 
     const target = await queryOne('SELECT id, role FROM users WHERE id = ?', [req.params.id]);
     if (!target) throw notFound('کاربر موردنطر پیدا نشد.');
@@ -79,6 +113,14 @@ router.put(
       assertPassword(password);
       await execute('UPDATE users SET password_hash = ? WHERE id = ?', [
         bcrypt.hashSync(String(password), 10),
+        req.params.id
+      ]);
+    }
+
+    if (security) {
+      await execute('UPDATE users SET security_question = ?, security_answer_hash = ? WHERE id = ?', [
+        security.question,
+        security.answerHash,
         req.params.id
       ]);
     }
